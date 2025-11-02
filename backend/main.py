@@ -1,8 +1,18 @@
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from typing import Optional
 
-from .models import Salesman, SalesmanList, Record, RecordList, LookupQuery, LLMParseRequest, LLMParseResponse
+from .models import (
+    Salesman,
+    SalesmanList,
+    Record,
+    RecordList,
+    LookupQuery,
+    LLMParseRequest,
+    LLMParseResponse,
+)
 from . import excel_store as store
 
 app = FastAPI(title="Desoutter Order Track API", version="1.0.0")
@@ -62,6 +72,20 @@ def update_record(record_id: str, rec: Record):
         raise HTTPException(status_code=404, detail="Güncellenecek kayıt bulunamadı")
     return _row_to_record(updated)
 
+
+@app.get("/records/export")
+def export_records():
+    path = store.get_excel_path()
+    store.ensure_workbook_format()
+    if not os.path.exists(path):
+        raise HTTPException(status_code=500, detail="Excel dosyası bulunamadı")
+    filename = os.path.basename(path)
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
+
 # ---------- Reports ----------
 
 @app.get("/reports/summary")
@@ -103,7 +127,11 @@ def llm_parse(req: LLMParseRequest):
 
 def _row_to_record(r) -> Record:
     # r bir pandas Series ya da dict olabilir
-    get = r.get if hasattr(r, "get") else (lambda k, default=None: r[k] if k in r else default)
+    get = (
+        r.get
+        if hasattr(r, "get")
+        else (lambda k, default=None: r[k] if k in r else default)
+    )
     from datetime import date
 
     def to_float(x):
@@ -114,27 +142,32 @@ def _row_to_record(r) -> Record:
 
     def to_date(x) -> Optional[date]:
         import pandas as pd
+
+        if x in (None, "", "nan", "NaT"):
+            return None
         try:
-            if x in (None, "", "nan"):
-                return None
             return pd.to_datetime(x).date()
         except Exception:
             return None
 
+    def value(field: str, default=None):
+        column = store.FIELD_TO_COLUMN[field]
+        return get(column, default)
+
     return Record(
-        record_id=str(get("record_id", None)),
-        date_of_request=to_date(get("Date of Request")),
-        salesman=str(get("SalesMan", "")),
-        customer_name=str(get("Customer Name", "")),
-        customer_po_no=str(get("Customer PO No", "")),
-        salesforce_reference=str(get("SalesForce Reference", "")),
-        so_no=str(get("SO No", "")),
-        amount_eur=to_float(get("Amount (EUR)")),
-        total_discount_pct=to_float(get("Total Discount (%)")),
-        cpi_eur=to_float(get("CPI (EUR)")),
-        cps_eur=to_float(get("CPS (EUR)")),
-        definition=str(get("Defination", "")),
-        date_of_delivery=to_date(get("Date of Delivery")),
-        date_of_invoice=to_date(get("Date of Invoice")),
-        note=str(get("Note", "")),
+        record_id=str(value("record_id", "")) or None,
+        date_of_request=to_date(value("date_of_request")),
+        salesman=str(value("salesman", "")),
+        customer_name=str(value("customer_name", "")),
+        customer_po_no=str(value("customer_po_no", "")),
+        salesforce_reference=str(value("salesforce_reference", "")),
+        so_no=str(value("so_no", "")),
+        amount_eur=to_float(value("amount_eur")),
+        total_discount_pct=to_float(value("total_discount_pct")),
+        cpi_eur=to_float(value("cpi_eur")),
+        cps_eur=to_float(value("cps_eur")),
+        definition=str(value("definition", "")),
+        date_of_delivery=to_date(value("date_of_delivery")),
+        date_of_invoice=to_date(value("date_of_invoice")),
+        note=str(value("note", "")),
     )

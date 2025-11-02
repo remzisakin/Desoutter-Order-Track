@@ -34,7 +34,7 @@ Varsayılan olarak Streamlit, http://localhost:8501 üzerinde çalışır ve htt
 - **Giriş modu**: Uygulama açılışında “Yeni Kayıt” veya “Mevcut Kaydı Düzelt”.
 - **Zorunlu alanlar**: Date of Request (takvim), SalesMan (select), Customer Name, Customer PO No, SalesForce Reference, SO No, Amount (€), Total Discount (%), CPI (€), CPS (€).
 - **CPI kuralı**: CPS > 0 ise CPI = Amount - CPS, değilse CPI = Amount.
-- **Opsiyonel alanlar**: Defination, Date of Delivery, Date of Invoice, Note.
+- **Opsiyonel alanlar**: Definition, Date of Delivery, Date of Invoice, Note.
 - **Görsel vurgu**: Date of Invoice doluysa liste görünümünde satır yeşil renkte gösterilir.
 - **SalesMan & Bölge Yönetimi (Data)**: Sol kenardaki panelden SalesMan ekle/güncelle; bölge olarak CPI Northern / CPI Southern atanabilir.
 - **Kayıt düzeltme**: SO No veya Customer PO No ile arayıp ilgili satırı bul, formu düzenle, kaydet.
@@ -77,6 +77,7 @@ yazarak yapılandırabilirsiniz.
 ## Notlar
 
 - Excel dosyası başka bir programda açıkken yazma hatası alabilirsiniz; kapatıp tekrar deneyin.
+- Streamlit sol paneldeki “📥 Excel Çıktısı” bölümünden anlık olarak biçimlendirilmiş Excel dosyasını indirebilirsiniz.
 - Records sayfasında `record_id` alanı backend tarafından üretilen benzersiz kimliktir; güncellemelerde kullanılır.
 - “OR” toplamları Date of Request’e göre, “OI” toplamları Date of Invoice’ı dolu kayıtlara göre hesaplanır.
 
