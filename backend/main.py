@@ -179,12 +179,28 @@ def _row_to_record(r) -> Record:
     def to_date(x) -> Optional[date]:
         import pandas as pd
 
-        if x in (None, "", "nan", "NaT"):
+        if x is None:
             return None
+
+        if isinstance(x, str):
+            if x.strip() in ("", "nan", "NaT"):
+                return None
+
         try:
-            return pd.to_datetime(x).date()
+            parsed = pd.to_datetime(x, errors="coerce")
         except Exception:
             return None
+
+        if pd.isna(parsed):
+            return None
+
+        if hasattr(parsed, "date"):
+            try:
+                return parsed.date()
+            except Exception:
+                return None
+
+        return None
 
     def value(field: str, default=None):
         column = store.FIELD_TO_COLUMN[field]
