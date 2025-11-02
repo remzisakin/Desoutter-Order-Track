@@ -17,6 +17,12 @@ from . import excel_store as store
 
 app = FastAPI(title="Desoutter Order Track API", version="1.0.0")
 
+
+@app.get("/")
+def root():
+    """Basit bir sağlık kontrolü döndürür."""
+    return {"status": "ok"}
+
 # CORS: frontend (Streamlit) için
 app.add_middleware(
     CORSMiddleware,
