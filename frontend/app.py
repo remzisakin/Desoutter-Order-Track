@@ -4,7 +4,12 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
-API_BASE = st.secrets.get("API_BASE", "http://localhost:8000")
+try:
+    API_BASE = st.secrets.get("API_BASE")  # type: ignore[attr-defined]
+    if not API_BASE:
+        raise KeyError
+except Exception:
+    API_BASE = "http://localhost:8000"
 
 st.set_page_config(page_title="Desoutter Order Track", page_icon="🧭", layout="wide")
 
@@ -35,6 +40,12 @@ def api_put(path: str, json: dict):
     r.raise_for_status()
     return r.json()
 
+
+def api_get_bytes(path: str) -> bytes:
+    r = requests.get(f"{API_BASE}{path}", timeout=30)
+    r.raise_for_status()
+    return r.content
+
 @st.cache_data(ttl=30)
 def load_salesmen():
     data = api_get("/data/salesmen")
@@ -59,6 +70,25 @@ with st.sidebar:
     api_url = st.text_input("API Base URL", value=API_BASE, help="FastAPI sunucusu adresi")
     if api_url != API_BASE:
         st.session_state["api_base_override"] = api_url
+
+    st.markdown("---")
+    st.subheader("📥 Excel Çıktısı")
+    excel_bytes = st.session_state.get("excel_bytes")
+    if st.button("Excel dosyasını hazırla", key="prepare_excel"):
+        try:
+            data = api_get_bytes("/records/export")
+            st.session_state["excel_bytes"] = data
+            st.success("Excel dosyası indirilmeye hazır.")
+        except Exception as e:
+            st.error(f"Excel alınamadı: {e}")
+    if excel_bytes:
+        st.download_button(
+            "Excel dosyasını indir",
+            data=excel_bytes,
+            file_name="Desoutter Order Track.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_excel",
+        )
 
     st.markdown("---")
     st.subheader("👥 SalesMan Data")
@@ -118,7 +148,7 @@ with tab1:
             cpi = compute_cpi(amount, cps)
             st.metric("CPI (€)", f"{cpi:,.2f}")
 
-            definition = st.text_input("Defination", value=pre.get("definition", ""))
+            definition = st.text_input("Definition", value=pre.get("definition", ""))
             col4, col5, col6 = st.columns(3)
             with col4:
                 date_of_delivery = st.date_input("Date of Delivery", value=pre.get("date_of_delivery"))
@@ -192,7 +222,7 @@ with tab1:
                 cpi = compute_cpi(amount, cps)
                 st.metric("CPI (€)", f"{cpi:,.2f}")
 
-                definition = st.text_input("Defination", value=rec.get("definition") or "")
+                definition = st.text_input("Definition", value=rec.get("definition") or "")
                 col4, col5, col6 = st.columns(3)
                 with col4:
                     date_of_delivery = st.date_input("Date of Delivery", value=pd.to_datetime(rec["date_of_delivery"]).date() if rec.get("date_of_delivery") else None)
@@ -235,21 +265,44 @@ with tab1:
         dfv = pd.DataFrame(items)
         if not dfv.empty:
             # Tarih & görsel vurgu
-            dfv = dfv.rename(columns={
-                "date_of_request": "Date of Request",
-                "customer_name": "Customer Name",
-                "customer_po_no": "Customer PO No",
-                "salesforce_reference": "SalesForce Reference",
-                "so_no": "SO No",
-                "amount_eur": "Amount (EUR)",
-                "total_discount_pct": "Total Discount (%)",
-                "cpi_eur": "CPI (EUR)",
-                "cps_eur": "CPS (EUR)",
-                "definition": "Defination",
-                "date_of_delivery": "Date of Delivery",
-                "date_of_invoice": "Date of Invoice",
-                "note": "Note",
-            })
+            dfv = dfv.rename(
+                columns={
+                    "date_of_request": "Date of Request",
+                    "salesman": "Sales Person",
+                    "customer_name": "Customer Name",
+                    "customer_po_no": "Customer PO No",
+                    "salesforce_reference": "Salesforce Reference",
+                    "so_no": "SO No",
+                    "amount_eur": "Amount (EUR)",
+                    "total_discount_pct": "Total Discount (%)",
+                    "cpi_eur": "CPI (EUR)",
+                    "cps_eur": "CPS (EUR)",
+                    "definition": "Definition",
+                    "date_of_delivery": "Date of Delivery",
+                    "date_of_invoice": "Date of Invoice",
+                    "note": "Note",
+                    "record_id": "Record ID",
+                }
+            )
+            ordered = [
+                "Date of Request",
+                "Sales Person",
+                "Customer Name",
+                "Customer PO No",
+                "Salesforce Reference",
+                "SO No",
+                "Amount (EUR)",
+                "Total Discount (%)",
+                "CPI (EUR)",
+                "CPS (EUR)",
+                "Definition",
+                "Date of Delivery",
+                "Date of Invoice",
+                "Note",
+                "Record ID",
+            ]
+            available = [col for col in ordered if col in dfv.columns]
+            dfv = dfv[available + [c for c in dfv.columns if c not in available]]
             st.dataframe(dfv.style.apply(
                 lambda r: ["background-color: #d1fae5" if str(r["Date of Invoice"]).strip() not in ("", "NaT", "None") else "" for _ in r],
                 axis=1
