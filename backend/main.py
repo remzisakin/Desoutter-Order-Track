@@ -59,10 +59,22 @@ def list_records():
         items.append(_row_to_record(r))
     return {"items": items}
 
+
+@app.get("/orders", response_model=RecordList, include_in_schema=False)
+def list_orders():
+    """Legacy uyumluluğu için /records endpoint'inin takma adı."""
+    return list_records()
+
 @app.post("/records", response_model=Record)
 def create_record(rec: Record):
     saved = store.create_record(rec.model_dump())
     return _row_to_record(saved)
+
+
+@app.post("/orders", response_model=Record, include_in_schema=False)
+def create_order(rec: Record):
+    """Legacy uyumluluğu için /records endpoint'inin takma adı."""
+    return create_record(rec)
 
 @app.post("/records/lookup", response_model=Record)
 def lookup_record(q: LookupQuery):
@@ -71,12 +83,24 @@ def lookup_record(q: LookupQuery):
         raise HTTPException(status_code=404, detail="Kayıt bulunamadı")
     return _row_to_record(row)
 
+
+@app.post("/orders/lookup", response_model=Record, include_in_schema=False)
+def lookup_order(q: LookupQuery):
+    """Legacy uyumluluğu için /records endpoint'inin takma adı."""
+    return lookup_record(q)
+
 @app.put("/records/{record_id}", response_model=Record)
 def update_record(record_id: str, rec: Record):
     updated = store.update_record(record_id, rec.model_dump())
     if not updated:
         raise HTTPException(status_code=404, detail="Güncellenecek kayıt bulunamadı")
     return _row_to_record(updated)
+
+
+@app.put("/orders/{record_id}", response_model=Record, include_in_schema=False)
+def update_order(record_id: str, rec: Record):
+    """Legacy uyumluluğu için /records endpoint'inin takma adı."""
+    return update_record(record_id, rec)
 
 
 @app.get("/records/export")
@@ -91,6 +115,12 @@ def export_records():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=filename,
     )
+
+
+@app.get("/orders/export", include_in_schema=False)
+def export_orders():
+    """Legacy uyumluluğu için /records endpoint'inin takma adı."""
+    return export_records()
 
 # ---------- Reports ----------
 
