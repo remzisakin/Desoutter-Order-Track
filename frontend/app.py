@@ -1,22 +1,37 @@
 # -*- coding: utf-8 -*-
-import requests
-import streamlit as st
-import pandas as pd
+import os
 from datetime import date
 
-try:
-    DEFAULT_API_BASE = st.secrets.get("API_BASE")  # type: ignore[attr-defined]
-    if not DEFAULT_API_BASE:
-        raise KeyError
-except Exception:
-    DEFAULT_API_BASE = "http://localhost:8000"
+import pandas as pd
+import requests
+import streamlit as st
+
+FALLBACK_API_BASE = "http://localhost:8000"
 
 
-def _normalize_base_url(base: str) -> str:
-    base = base.strip()
+def _normalize_base_url(base: str | None, fallback: str = FALLBACK_API_BASE) -> str:
+    base = (base or "").strip()
     if not base:
-        return DEFAULT_API_BASE
-    return base.rstrip("/") or DEFAULT_API_BASE
+        return fallback
+    return base.rstrip("/") or fallback
+
+
+def _determine_default_api_base() -> str:
+    env_base = os.getenv("API_BASE")
+    if env_base and env_base.strip():
+        return _normalize_base_url(env_base)
+
+    try:
+        secret_base = st.secrets.get("API_BASE")  # type: ignore[attr-defined]
+        if secret_base and str(secret_base).strip():
+            return _normalize_base_url(str(secret_base))
+    except Exception:
+        pass
+
+    return FALLBACK_API_BASE
+
+
+DEFAULT_API_BASE = _determine_default_api_base()
 
 
 if "api_base_override" not in st.session_state:
@@ -24,11 +39,15 @@ if "api_base_override" not in st.session_state:
 
 
 def get_api_base() -> str:
-    return _normalize_base_url(st.session_state.get("api_base_override", DEFAULT_API_BASE))
+    return _normalize_base_url(
+        st.session_state.get("api_base_override", DEFAULT_API_BASE),
+        DEFAULT_API_BASE,
+    )
 
 
 def build_api_url(path: str, base: str | None = None) -> str:
-    base_url = _normalize_base_url(base or get_api_base())
+    fallback = get_api_base()
+    base_url = _normalize_base_url(base if base is not None else fallback, fallback)
     if not path.startswith("/"):
         path = f"/{path}"
     return f"{base_url}{path}"
@@ -95,7 +114,7 @@ with st.sidebar:
         value=current_api_base,
         help="FastAPI sunucusu adresi",
     )
-    normalized_url = _normalize_base_url(api_url)
+    normalized_url = _normalize_base_url(api_url, DEFAULT_API_BASE)
     if normalized_url != current_api_base:
         st.session_state["api_base_override"] = normalized_url
         refresh_salesmen()
