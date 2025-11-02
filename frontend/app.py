@@ -4,6 +4,7 @@ from datetime import date
 
 import pandas as pd
 import requests
+from requests import HTTPError, RequestException
 import streamlit as st
 
 FALLBACK_API_BASE = "http://localhost:8000"
@@ -66,31 +67,100 @@ st.title("🧭 Desoutter Order Track")
 st.caption("Tek Excel dosyası ile kayıt, düzeltme ve zengin raporlama")
 
 # -------------- Yardımcılar --------------
+class APIRequestError(RuntimeError):
+    """Backend API çağrılarında daha okunabilir hata mesajı döndürür."""
+
+    def __init__(self, message: str, *, connection: bool = False):
+        super().__init__(message)
+        self.is_connection_error = connection
+
+
+def _request(method: str, path: str, base: str | None = None, **kwargs) -> requests.Response:
+    url = build_api_url(path, base)
+    try:
+        response = requests.request(method, url, timeout=30, **kwargs)
+        response.raise_for_status()
+        return response
+    except requests.exceptions.Timeout as exc:
+        raise APIRequestError(
+            "API isteği zaman aşımına uğradı. Lütfen bağlantınızı ve API sunucusunu kontrol edin.",
+            connection=True,
+        ) from exc
+    except requests.exceptions.ConnectionError as exc:
+        raise APIRequestError(
+            f"API'ye bağlanılamadı. `{url}` adresinin erişilebilir olduğundan emin olun.",
+            connection=True,
+        ) from exc
+    except HTTPError as exc:
+        response = exc.response
+        detail = ""
+        status = None
+        if response is not None:
+            status = response.status_code
+            try:
+                payload = response.json()
+                if isinstance(payload, dict):
+                    detail = str(payload.get("detail", "")).strip()
+            except ValueError:
+                detail = (response.text or "").strip()
+        message = "API isteği hata döndürdü"
+        if status:
+            message += f" (HTTP {status})"
+        if detail:
+            message += f": {detail}"
+        raise APIRequestError(message) from exc
+    except RequestException as exc:
+        raise APIRequestError(
+            "API isteği tamamlanamadı. Lütfen daha sonra tekrar deneyin.", connection=True
+        ) from exc
+
+
+def _request_json(method: str, path: str, base: str | None = None, **kwargs):
+    response = _request(method, path, base=base, **kwargs)
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise APIRequestError("API beklenmedik bir yanıt döndürdü (geçersiz JSON).") from exc
+
+
 def api_get(path: str, base: str | None = None):
-    r = requests.get(build_api_url(path, base), timeout=30)
-    r.raise_for_status()
-    return r.json()
+    return _request_json("get", path, base=base)
+
 
 def api_post(path: str, json: dict, base: str | None = None):
-    r = requests.post(build_api_url(path, base), json=json, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    return _request_json("post", path, base=base, json=json)
+
 
 def api_put(path: str, json: dict, base: str | None = None):
-    r = requests.put(build_api_url(path, base), json=json, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    return _request_json("put", path, base=base, json=json)
 
 
 def api_get_bytes(path: str, base: str | None = None) -> bytes:
-    r = requests.get(build_api_url(path, base), timeout=30)
-    r.raise_for_status()
-    return r.content
+    response = _request("get", path, base=base)
+    return response.content
 
 @st.cache_data(ttl=30)
 def load_salesmen(api_base: str):
     data = api_get("/data/salesmen", base=api_base)
     return data["items"]
+
+
+def show_api_error(error: APIRequestError):
+    key = f"_api_error::{str(error)}"
+    if not st.session_state.get(key):
+        st.session_state[key] = True
+        if getattr(error, "is_connection_error", False):
+            st.error(f"Bağlantı hatası: {error}")
+        else:
+            st.error(f"API hatası: {error}")
+
+
+def safe_load_salesmen(api_base: str):
+    try:
+        return load_salesmen(api_base)
+    except APIRequestError as exc:
+        show_api_error(exc)
+        return []
 
 def refresh_salesmen():
     load_salesmen.clear()
@@ -129,6 +199,8 @@ with st.sidebar:
             data = api_get_bytes("/records/export", base=current_api_base)
             st.session_state["excel_bytes"] = data
             st.success("Excel dosyası indirilmeye hazır.")
+        except APIRequestError as e:
+            show_api_error(e)
         except Exception as e:
             st.error(f"Excel alınamadı: {e}")
     if excel_bytes:
@@ -143,7 +215,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("👥 SalesMan Data")
     # Listele
-    sms = load_salesmen(current_api_base)
+    sms = safe_load_salesmen(current_api_base)
     st.write(pd.DataFrame(sms))
     # Ekle/Güncelle
     with st.form("salesman_form", clear_on_submit=True):
@@ -151,13 +223,16 @@ with st.sidebar:
         region = st.selectbox("Bölge", ["CPI Northern", "CPI Southern", "Unassigned"])
         submitted = st.form_submit_button("Kaydet / Güncelle")
         if submitted and name.strip():
-            _ = api_post(
-                "/data/salesmen",
-                {"name": name.strip(), "region": region},
-                base=current_api_base,
-            )
-            st.success("SalesMan kaydedildi.")
-            refresh_salesmen()
+            try:
+                _ = api_post(
+                    "/data/salesmen",
+                    {"name": name.strip(), "region": region},
+                    base=current_api_base,
+                )
+                st.success("SalesMan kaydedildi.")
+                refresh_salesmen()
+            except APIRequestError as e:
+                show_api_error(e)
 
 # -------------- Sayfa Sekmeleri --------------
 tab1, tab2 = st.tabs(["📋 Kayıt", "📊 Raporlar"])
@@ -176,6 +251,8 @@ with tab1:
                 parsed = api_post("/llm/parse", {"email_text": email_text}, base=api_base)
                 st.session_state["prefill"] = parsed["suggested"]
                 st.success("Ön dolum önerileri yüklendi.")
+            except APIRequestError as e:
+                show_api_error(e)
             except Exception as e:
                 st.error(f"LLM parse hatası: {e}")
 
@@ -191,7 +268,7 @@ with tab1:
                 salesforce_reference = st.text_input("SalesForce Reference", value=pre.get("salesforce_reference", ""))
 
             with col2:
-                salesmen = [s["name"] for s in load_salesmen(api_base)]
+                salesmen = [s["name"] for s in safe_load_salesmen(api_base)]
                 salesman = st.selectbox("SalesMan", options=salesmen, index=0 if salesmen else None)
                 customer_po_no = st.text_input("Customer PO No", value=pre.get("customer_po_no", ""))
                 so_no = st.text_input("SO No", value=pre.get("so_no", ""))
@@ -235,6 +312,8 @@ with tab1:
                     rec = api_post("/records", payload, base=api_base)
                     st.success(f"Kayıt eklendi. Record ID: {rec['record_id']}")
                     st.session_state.pop("prefill", None)
+                except APIRequestError as e:
+                    show_api_error(e)
                 except Exception as e:
                     st.error(f"Hata: {e}")
 
@@ -250,6 +329,8 @@ with tab1:
                     rec = api_post("/records/lookup", q, base=api_base)
                     st.session_state["editing"] = rec
                     st.success("Kayıt yüklendi.")
+                except APIRequestError as e:
+                    show_api_error(e)
                 except Exception as e:
                     st.error(f"Bulunamadı: {e}")
 
@@ -265,7 +346,7 @@ with tab1:
                     salesforce_reference = st.text_input("SalesForce Reference", value=rec["salesforce_reference"])
 
                 with col2:
-                    salesmen = [s["name"] for s in load_salesmen(api_base)]
+                    salesmen = [s["name"] for s in safe_load_salesmen(api_base)]
                     salesman = st.selectbox("SalesMan", options=salesmen, index=(salesmen.index(rec["salesman"]) if rec["salesman"] in salesmen else 0))
                     customer_po_no = st.text_input("Customer PO No", value=rec["customer_po_no"])
                     so_no = st.text_input("SO No", value=rec["so_no"])
@@ -310,6 +391,8 @@ with tab1:
                         updated = api_put(f"/records/{rid}", payload, base=api_base)
                         st.success("Kayıt güncellendi.")
                         st.session_state["editing"] = updated
+                    except APIRequestError as e:
+                        show_api_error(e)
                     except Exception as e:
                         st.error(f"Hata: {e}")
 
@@ -365,6 +448,8 @@ with tab1:
             ), use_container_width=True, hide_index=True)
         else:
             st.info("Henüz kayıt yok.")
+    except APIRequestError as e:
+        show_api_error(e)
     except Exception as e:
         st.error(f"Önizleme hatası: {e}")
 
@@ -405,5 +490,7 @@ with tab2:
             st.dataframe(df_oi, use_container_width=True, hide_index=True)
         else:
             st.info("OI için veri yok.")
+    except APIRequestError as e:
+        show_api_error(e)
     except Exception as e:
         st.error(f"Raporlar yüklenemedi: {e}")
