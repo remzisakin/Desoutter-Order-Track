@@ -5,11 +5,33 @@ import pandas as pd
 from datetime import date
 
 try:
-    API_BASE = st.secrets.get("API_BASE")  # type: ignore[attr-defined]
-    if not API_BASE:
+    DEFAULT_API_BASE = st.secrets.get("API_BASE")  # type: ignore[attr-defined]
+    if not DEFAULT_API_BASE:
         raise KeyError
 except Exception:
-    API_BASE = "http://localhost:8000"
+    DEFAULT_API_BASE = "http://localhost:8000"
+
+
+def _normalize_base_url(base: str) -> str:
+    base = base.strip()
+    if not base:
+        return DEFAULT_API_BASE
+    return base.rstrip("/") or DEFAULT_API_BASE
+
+
+if "api_base_override" not in st.session_state:
+    st.session_state["api_base_override"] = DEFAULT_API_BASE
+
+
+def get_api_base() -> str:
+    return _normalize_base_url(st.session_state.get("api_base_override", DEFAULT_API_BASE))
+
+
+def build_api_url(path: str, base: str | None = None) -> str:
+    base_url = _normalize_base_url(base or get_api_base())
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return f"{base_url}{path}"
 
 st.set_page_config(page_title="Desoutter Order Track", page_icon="🧭", layout="wide")
 
@@ -25,30 +47,30 @@ st.title("🧭 Desoutter Order Track")
 st.caption("Tek Excel dosyası ile kayıt, düzeltme ve zengin raporlama")
 
 # -------------- Yardımcılar --------------
-def api_get(path: str):
-    r = requests.get(f"{API_BASE}{path}", timeout=30)
+def api_get(path: str, base: str | None = None):
+    r = requests.get(build_api_url(path, base), timeout=30)
     r.raise_for_status()
     return r.json()
 
-def api_post(path: str, json: dict):
-    r = requests.post(f"{API_BASE}{path}", json=json, timeout=30)
+def api_post(path: str, json: dict, base: str | None = None):
+    r = requests.post(build_api_url(path, base), json=json, timeout=30)
     r.raise_for_status()
     return r.json()
 
-def api_put(path: str, json: dict):
-    r = requests.put(f"{API_BASE}{path}", json=json, timeout=30)
+def api_put(path: str, json: dict, base: str | None = None):
+    r = requests.put(build_api_url(path, base), json=json, timeout=30)
     r.raise_for_status()
     return r.json()
 
 
-def api_get_bytes(path: str) -> bytes:
-    r = requests.get(f"{API_BASE}{path}", timeout=30)
+def api_get_bytes(path: str, base: str | None = None) -> bytes:
+    r = requests.get(build_api_url(path, base), timeout=30)
     r.raise_for_status()
     return r.content
 
 @st.cache_data(ttl=30)
-def load_salesmen():
-    data = api_get("/data/salesmen")
+def load_salesmen(api_base: str):
+    data = api_get("/data/salesmen", base=api_base)
     return data["items"]
 
 def refresh_salesmen():
@@ -67,16 +89,25 @@ def compute_cpi(amount, cps):
 # -------------- Giriş Ekranı --------------
 with st.sidebar:
     st.header("⚙️ Ayarlar")
-    api_url = st.text_input("API Base URL", value=API_BASE, help="FastAPI sunucusu adresi")
-    if api_url != API_BASE:
-        st.session_state["api_base_override"] = api_url
+    current_api_base = get_api_base()
+    api_url = st.text_input(
+        "API Base URL",
+        value=current_api_base,
+        help="FastAPI sunucusu adresi",
+    )
+    normalized_url = _normalize_base_url(api_url)
+    if normalized_url != current_api_base:
+        st.session_state["api_base_override"] = normalized_url
+        refresh_salesmen()
+        st.session_state.pop("excel_bytes", None)
+        current_api_base = normalized_url
 
     st.markdown("---")
     st.subheader("📥 Excel Çıktısı")
     excel_bytes = st.session_state.get("excel_bytes")
     if st.button("Excel dosyasını hazırla", key="prepare_excel"):
         try:
-            data = api_get_bytes("/records/export")
+            data = api_get_bytes("/records/export", base=current_api_base)
             st.session_state["excel_bytes"] = data
             st.success("Excel dosyası indirilmeye hazır.")
         except Exception as e:
@@ -93,7 +124,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("👥 SalesMan Data")
     # Listele
-    sms = load_salesmen()
+    sms = load_salesmen(current_api_base)
     st.write(pd.DataFrame(sms))
     # Ekle/Güncelle
     with st.form("salesman_form", clear_on_submit=True):
@@ -101,12 +132,18 @@ with st.sidebar:
         region = st.selectbox("Bölge", ["CPI Northern", "CPI Southern", "Unassigned"])
         submitted = st.form_submit_button("Kaydet / Güncelle")
         if submitted and name.strip():
-            _ = api_post("/data/salesmen", {"name": name.strip(), "region": region})
+            _ = api_post(
+                "/data/salesmen",
+                {"name": name.strip(), "region": region},
+                base=current_api_base,
+            )
             st.success("SalesMan kaydedildi.")
             refresh_salesmen()
 
 # -------------- Sayfa Sekmeleri --------------
 tab1, tab2 = st.tabs(["📋 Kayıt", "📊 Raporlar"])
+
+api_base = get_api_base()
 
 with tab1:
     st.subheader("Giriş modu")
@@ -117,7 +154,7 @@ with tab1:
         email_text = st.text_area("E-posta metnini yapıştırın", height=150)
         if st.button("Ön Doldur (LLM Stub)"):
             try:
-                parsed = api_post("/llm/parse", {"email_text": email_text})
+                parsed = api_post("/llm/parse", {"email_text": email_text}, base=api_base)
                 st.session_state["prefill"] = parsed["suggested"]
                 st.success("Ön dolum önerileri yüklendi.")
             except Exception as e:
@@ -135,7 +172,7 @@ with tab1:
                 salesforce_reference = st.text_input("SalesForce Reference", value=pre.get("salesforce_reference", ""))
 
             with col2:
-                salesmen = [s["name"] for s in load_salesmen()]
+                salesmen = [s["name"] for s in load_salesmen(api_base)]
                 salesman = st.selectbox("SalesMan", options=salesmen, index=0 if salesmen else None)
                 customer_po_no = st.text_input("Customer PO No", value=pre.get("customer_po_no", ""))
                 so_no = st.text_input("SO No", value=pre.get("so_no", ""))
@@ -176,7 +213,7 @@ with tab1:
                     "note": note,
                 }
                 try:
-                    rec = api_post("/records", payload)
+                    rec = api_post("/records", payload, base=api_base)
                     st.success(f"Kayıt eklendi. Record ID: {rec['record_id']}")
                     st.session_state.pop("prefill", None)
                 except Exception as e:
@@ -191,7 +228,7 @@ with tab1:
             if st.button("Bul"):
                 try:
                     q = {"so_no": lookup_value} if lookup_type == "SO No" else {"customer_po_no": lookup_value}
-                    rec = api_post("/records/lookup", q)
+                    rec = api_post("/records/lookup", q, base=api_base)
                     st.session_state["editing"] = rec
                     st.success("Kayıt yüklendi.")
                 except Exception as e:
@@ -209,7 +246,7 @@ with tab1:
                     salesforce_reference = st.text_input("SalesForce Reference", value=rec["salesforce_reference"])
 
                 with col2:
-                    salesmen = [s["name"] for s in load_salesmen()]
+                    salesmen = [s["name"] for s in load_salesmen(api_base)]
                     salesman = st.selectbox("SalesMan", options=salesmen, index=(salesmen.index(rec["salesman"]) if rec["salesman"] in salesmen else 0))
                     customer_po_no = st.text_input("Customer PO No", value=rec["customer_po_no"])
                     so_no = st.text_input("SO No", value=rec["so_no"])
@@ -251,7 +288,7 @@ with tab1:
                         "note": note,
                     }
                     try:
-                        updated = api_put(f"/records/{rid}", payload)
+                        updated = api_put(f"/records/{rid}", payload, base=api_base)
                         st.success("Kayıt güncellendi.")
                         st.session_state["editing"] = updated
                     except Exception as e:
@@ -261,7 +298,7 @@ with tab1:
     st.markdown("---")
     st.subheader("Son Kayıtlar")
     try:
-        items = api_get("/records")["items"]
+        items = api_get("/records", base=api_base)["items"]
         dfv = pd.DataFrame(items)
         if not dfv.empty:
             # Tarih & görsel vurgu
@@ -315,7 +352,7 @@ with tab1:
 with tab2:
     st.subheader("Raporlar")
     try:
-        rep = api_get("/reports/summary")
+        rep = api_get("/reports/summary", base=api_base)
         # Bölge bazında
         st.markdown("### Bölge Bazında Toplamlar")
         df_region = pd.DataFrame(rep["by_region"])
